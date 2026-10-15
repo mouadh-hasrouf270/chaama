@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: chaama-backend
+    runtime: python
+    plan: free
+    rootDir: django_backend
+    buildCommand: bash build.sh
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    healthCheckPath: /health/
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: chaama-backend.onrender.com
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: https://chaama-ten.vercel.app
+      - key: BOOKING_TIME_ZONE
+        value: Africa/Algiers
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALENDAR_REDIRECT_URI
+        value: https://chaama-ten.vercel.app/app/calendar
+      - key: GOOGLE_CALENDAR_ENCRYPTION_KEY
+        sync: false
