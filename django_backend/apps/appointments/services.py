@@ -27,7 +27,12 @@ def visible_appointments(user):
 
 def visible_clients(user):
     qs = Client.objects.all()
-    return qs if is_admin(user) else qs.filter(created_by=user)
+    if is_admin(user):
+        return qs
+    if user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+        # Client access is granted only by a dossier actively assigned to this lawyer.
+        return qs.filter(matters__lead_lawyer__user=user).distinct()
+    return qs.filter(created_by=user)
 
 
 def lock_calendar(lawyer_id):

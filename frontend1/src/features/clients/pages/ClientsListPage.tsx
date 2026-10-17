@@ -13,6 +13,8 @@ export default function ClientsListPage() {
   const [page, setPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const navigate = useNavigate();
+  const { data: currentUser } = useApi<any>("/accounts/me/");
+  const isPartner = currentUser?.role === "EXTERNAL_SUBCONTRACTOR";
   const { data, loading, error, reload } = useApi(`/v1/clients/?search=${encodeURIComponent(recherche)}&page=${page}`);
   const clients = (data?.results || []).map((client: any) => ({
     id: client.id, nom: `${client.first_name} ${client.last_name}`,
@@ -28,7 +30,7 @@ export default function ClientsListPage() {
       <PageHeader
         eyebrow="Clients"
         title={`${data?.count ?? "—"} clients`}
-        action={
+        action={currentUser?.role === "SUPER_ADMIN" ? (
           <button
             type="button"
             onClick={() => setShowForm(true)}
@@ -38,10 +40,10 @@ export default function ClientsListPage() {
             <span className="hidden xs:inline sm:inline">Nouveau client</span>
             <span className="sm:hidden">Nouveau</span>
           </button>
-        }
+        ) : undefined}
       />
 
-      <ClientFormModal
+      {currentUser?.role === "SUPER_ADMIN" && <ClientFormModal
         open={showForm}
         onClose={() => setShowForm(false)}
         onCreated={(client) => {
@@ -51,7 +53,7 @@ export default function ClientsListPage() {
           reload();
           navigate(`/app/clients/${client.id}`);
         }}
-      />
+      />}
 
       {/* =================================================
           RECHERCHE

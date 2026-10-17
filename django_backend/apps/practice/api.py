@@ -11,7 +11,7 @@ from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from apps.accounts.models import Client, LawyerProfile
+from apps.accounts.models import Client, LawyerProfile, User
 from apps.accounts.permissions import is_admin
 from apps.accounts.services import LAWYER_ROLES
 from apps.activity.services import record_action
@@ -29,6 +29,8 @@ class PracticeAccess:
         qs = Matter.objects.select_related('client', 'lead_lawyer')
         if is_admin(self.request.user):
             return qs
+        if self.request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            return qs.filter(lead_lawyer__user=self.request.user)
         return qs.filter(Q(created_by=self.request.user) | Q(lead_lawyer__user=self.request.user) | Q(client__created_by=self.request.user)).distinct()
 
 
@@ -45,12 +47,28 @@ class MatterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Client is not accessible.')
         return client
     def validate_lead_lawyer(self, lawyer):
-        if lawyer and not (is_admin(self.context['request'].user) or lawyer.user_id == self.context['request'].user.pk):
+        if lawyer and not is_admin(self.context['request'].user):
             raise serializers.ValidationError('Lawyer is not accessible.')
         return lawyer
 
 
 class MatterViewSet(PracticeAccess, viewsets.ModelViewSet):
+    """An assigned partner may work on a dossier, not create or reassign it."""
+    def create(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied("Only the primary lawyer may create dossiers.")
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied("Partners cannot modify dossier master data.")
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied("Partners cannot modify dossier master data.")
+        return super().partial_update(request, *args, **kwargs)
+
     serializer_class = MatterSerializer
     def get_queryset(self):
         qs = self.scope()
@@ -58,9 +76,15 @@ class MatterViewSet(PracticeAccess, viewsets.ModelViewSet):
             qs = qs.filter(client_id=self.request.query_params['client'])
         return qs
     def perform_create(self, serializer):
+        if self.request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Partners cannot create dossiers.')
         obj=serializer.save(created_by=self.request.user)
         record_action(self.request, "matter.created", obj)
     def perform_update(self, serializer):
+        if self.request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Partners cannot edit the dossier master record or its assignment.')
+        if 'lead_lawyer' in serializer.validated_data and not is_admin(self.request.user):
+            raise PermissionDenied('Only the administrator can assign a dossier.')
         if 'client' in serializer.validated_data and serializer.validated_data['client'].pk != serializer.instance.client_id:
             raise ValidationError({'client':'Cannot move a dossier to another client.'})
         obj=serializer.save()
@@ -130,7 +154,7 @@ class EventSerializer(serializers.ModelSerializer):
         return attrs
     def validate_matter(self, matter):
         request = self.context['request']
-        qs = Matter.objects.all() if is_admin(request.user) else Matter.objects.filter(Q(created_by=request.user) | Q(lead_lawyer__user=request.user) | Q(client__created_by=request.user))
+        qs = Matter.objects.all() if is_admin(request.user) else Matter.objects.filter(lead_lawyer__user=request.user) if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR else Matter.objects.filter(Q(created_by=request.user) | Q(lead_lawyer__user=request.user) | Q(client__created_by=request.user))
         if not qs.filter(pk=matter.pk).exists():
             raise serializers.ValidationError('Dossier is inaccessible.')
         return matter
@@ -160,9 +184,16 @@ class NoteSerializer(serializers.ModelSerializer):
         fields = ['id','matter','body','author','created_at']
         read_only_fields = ['id','author','created_at']
     def validate_matter(self, matter):
-        if not (Matter.objects.filter(pk=matter.pk).exists() and (
-            is_admin(self.context['request'].user) or
-            Matter.objects.filter(pk=matter.pk).filter(Q(created_by=self.context['request'].user) | Q(lead_lawyer__user=self.context['request'].user) | Q(client__created_by=self.context['request'].user)).exists())):
+        user = self.context['request'].user
+        if is_admin(user):
+            allowed = True
+        elif user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            allowed = Matter.objects.filter(pk=matter.pk, lead_lawyer__user=user).exists()
+        else:
+            allowed = Matter.objects.filter(pk=matter.pk).filter(
+                Q(created_by=user) | Q(lead_lawyer__user=user) | Q(client__created_by=user)
+            ).exists()
+        if not allowed:
             raise serializers.ValidationError('Dossier inaccessible.')
         return matter
 
@@ -240,7 +271,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         return attrs
     def validate_matter(self,matter):
         request = self.context['request']
-        qs = Matter.objects.all() if is_admin(request.user) else Matter.objects.filter(Q(created_by=request.user) | Q(lead_lawyer__user=request.user) | Q(client__created_by=request.user))
+        qs = Matter.objects.all() if is_admin(request.user) else Matter.objects.filter(lead_lawyer__user=request.user) if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR else Matter.objects.filter(Q(created_by=request.user) | Q(lead_lawyer__user=request.user) | Q(client__created_by=request.user))
         if not qs.filter(pk=matter.pk).exists(): raise serializers.ValidationError('Dossier inaccessible.')
         return matter
     @transaction.atomic
@@ -265,6 +296,18 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
 class InvoiceViewSet(PracticeAccess, viewsets.ModelViewSet):
     serializer_class = InvoiceSerializer
+    def create(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Only the office can create invoices.')
+        return super().create(request, *args, **kwargs)
+    def update(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Only the office can modify invoices.')
+        return super().update(request, *args, **kwargs)
+    def partial_update(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Only the office can modify invoices.')
+        return super().partial_update(request, *args, **kwargs)
     def get_queryset(self):
         qs = Invoice.objects.filter(matter__in=self.scope()).select_related('matter','matter__client').prefetch_related('lines','payments')
         if self.request.query_params.get('matter'): qs = qs.filter(matter_id=self.request.query_params['matter'])

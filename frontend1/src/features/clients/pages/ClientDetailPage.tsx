@@ -7,15 +7,19 @@ import { PageHeader, Card, Badge } from '../../../components/ui/InternalUI';
 
 export default function ClientDetailPage() {
   const { id } = useParams();
+  const { data: currentUser } = useApi<any>("/accounts/me/");
+  const isPartner = currentUser?.role === "EXTERNAL_SUBCONTRACTOR";
+  const isAdmin = currentUser?.role === "SUPER_ADMIN";
+  const { data: lawyers } = useApi<any[]>('/accounts/lawyers/', true);
   const { data: client, loading, error } = useApi(id ? `/v1/clients/${id}/` : null);
   const { data: matters, reload } = useApi<any[]>(id ? `/v1/matters/?client=${id}` : null, true);
   const [show, setShow] = useState(false);
-  const [form, setForm] = useState({ title:'', matter_type:'', description:'', opposing_party:'', jurisdiction:'', court_reference:'', opened_at:new Date().toISOString().slice(0,10) });
+  const [form, setForm] = useState({ title:'', matter_type:'', description:'', opposing_party:'', jurisdiction:'', court_reference:'', opened_at:new Date().toISOString().slice(0,10), lead_lawyer: '' });
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   async function create(e: React.FormEvent) {
     e.preventDefault();setSaving(true);setMessage('');
-    try { await api.post('/v1/matters/', {...form, client: Number(id)});setShow(false);setForm({...form,title:'',description:'',opposing_party:''});reload(); }
+    try { await api.post('/v1/matters/', {...form, lead_lawyer: form.lead_lawyer ? Number(form.lead_lawyer) : null, client: Number(id)});setShow(false);setForm({...form,title:'',description:'',opposing_party:''});reload(); }
     catch(err){setMessage(errorMessage(err));}finally{setSaving(false);}
   }
   return <div className="w-full space-y-5">
@@ -24,9 +28,15 @@ export default function ClientDetailPage() {
     {loading && <p>Chargement…</p>}{error && <p role="alert">{error}</p>}
     <div className="grid gap-5 lg:grid-cols-[1fr_290px]">
       <Card className="p-5">
-        <div className="mb-5 flex items-center justify-between gap-3"><h2 className="text-lg font-semibold">Dossiers juridiques ({matters?.length || 0})</h2><button onClick={()=>setShow(!show)} className="flex items-center gap-2 bg-chaama-dark px-3 py-2 text-xs text-white"><Plus size={15}/> Nouveau dossier</button></div>
-        {show && <form onSubmit={create} className="mb-6 grid gap-3 rounded border border-chaama-border p-4 sm:grid-cols-2">
+        <div className="mb-5 flex items-center justify-between gap-3"><h2 className="text-lg font-semibold">Dossiers juridiques ({matters?.length || 0})</h2>{currentUser?.role === "SUPER_ADMIN" && <button onClick={()=>setShow(!show)} className="flex items-center gap-2 bg-chaama-dark px-3 py-2 text-xs text-white"><Plus size={15}/> Nouveau dossier</button>}</div>
+        {show && currentUser?.role === "SUPER_ADMIN" && <form onSubmit={create} className="mb-6 grid gap-3 rounded border border-chaama-border p-4 sm:grid-cols-2">
           {([['title','Intitulé du dossier'],['matter_type','Domaine juridique'],['opposing_party','Partie adverse'],['jurisdiction','Tribunal / Juridiction'],['court_reference','Référence judiciaire']] as const).map(([key,label])=><label key={key} className="text-xs">{label}<input required={key==='title'} value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})} className="mt-1 w-full border p-2 text-sm" /></label>)}
+          {isAdmin && <label className="text-xs">Avocat responsable
+            <select className="mt-1 w-full border p-2 text-sm" value={form.lead_lawyer} onChange={e=>setForm({...form,lead_lawyer:e.target.value})}>
+              <option value="">À attribuer ultérieurement</option>
+              {lawyers?.map((lawyer:any)=><option key={lawyer.id} value={lawyer.id}>{lawyer.user_name || lawyer.bar_number || `Avocat ${lawyer.id}`}</option>)}
+            </select>
+          </label>}
           <label className="text-xs">Date d'ouverture<input type="date" required value={form.opened_at} onChange={e=>setForm({...form,opened_at:e.target.value})} className="mt-1 w-full border p-2 text-sm" /></label>
           <label className="text-xs sm:col-span-2">Description<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})} className="mt-1 w-full border p-2 text-sm" /></label>
           {message && <p role="alert" className="text-red-700 sm:col-span-2">{message}</p>}

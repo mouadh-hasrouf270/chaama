@@ -4,6 +4,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import generics, mixins, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -120,6 +121,22 @@ class LawyerProfileViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
 
 
 class ClientViewSet(viewsets.ModelViewSet):
+    """External partners can read assigned clients, never create or edit them."""
+    def create(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied("Only the primary lawyer may create clients.")
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied("Partners cannot edit client records.")
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied("Partners cannot edit client records.")
+        return super().partial_update(request, *args, **kwargs)
+
     serializer_class = ClientSerializer
     permission_classes = [CanManageClients]
     filterset_fields = ['city']
@@ -130,15 +147,21 @@ class ClientViewSet(viewsets.ModelViewSet):
             return queryset.none()
         if is_admin(self.request.user):
             return queryset
+        if self.request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            return queryset.filter(matters__lead_lawyer__user=self.request.user).distinct()
         return queryset.filter(created_by=self.request.user)
 
     def perform_create(self, serializer):
+        if self.request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Partners cannot create clients. The lead lawyer assigns existing clients.')
         from apps.activity.services import record_action
         with transaction.atomic():
             instance = serializer.save(created_by=self.request.user)
             record_action(self.request, 'client.created', instance)
 
     def perform_update(self, serializer):
+        if self.request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Partners cannot change client master records.')
         from apps.activity.services import record_action
         with transaction.atomic():
             instance = serializer.save()
@@ -159,6 +182,8 @@ class MyClientProfileView(generics.RetrieveUpdateAPIView):
     http_method_names = ['get', 'patch', 'head', 'options']
 
     def perform_update(self, serializer):
+        if self.request.user.role == User.Role.EXTERNAL_SUBCONTRACTOR:
+            raise PermissionDenied('Partners cannot change client master records.')
         from apps.activity.services import record_action
         with transaction.atomic():
             instance = serializer.save()
